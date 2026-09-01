@@ -12,6 +12,26 @@ export default function DebugPage() {
   const [messages, setMessages] = useState([]); // [{ id, role, text }]
   const [chatInput, setChatInput] = useState("");
 
+  function getLastCookieSyncTime() {
+    const lastSync = Number(localStorage.getItem("zot-last-cookie-sync-time"));
+
+    if (!lastSync) return "Last updated: never";
+    const diffSeconds = Math.floor((Date.now() - lastSync) / 1000);
+    if (diffSeconds < 60) {
+        return `${diffSeconds} sec ago`;
+    }
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    if (diffMinutes < 60) {
+        return `${diffMinutes} min ago`;
+    }
+    const diffHours = Math.floor(diffMinutes / 60);
+    if (diffHours < 24) {
+        return `${diffHours} hr ago`;
+    }
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+}
+
   async function checkQuota() {
     setQuota("loading...");
     const res = await zotFetch("/api/quota");
@@ -146,7 +166,10 @@ export default function DebugPage() {
           reset stored cookies
         </button>
       </div>
-
+      
+      <div className="text-xs text-gray-500 pb-2">
+        Cookies last updated {getLastCookieSyncTime()}
+        </div>
       <section className="mb-4 p-3 border border-neutral-700 rounded">
         <h2 className="font-bold mb-2">quota</h2>
         <button onClick={checkQuota} className="px-2 py-1 bg-neutral-800 rounded">
@@ -198,3 +221,4 @@ export default function DebugPage() {
     </div>
   );
 }
+

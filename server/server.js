@@ -26,10 +26,10 @@
 // this server, not the browser, that turns it into a real `Cookie` header when
 // calling zotgpt.
 //
-// config.local.js is only the *bootstrap* seed: used when a request arrives
-// with no `x-zot-cookies` header at all (a browser with empty localStorage -
-// first run, or after clearing storage). Every response after that carries
-// forward whatever the client already had, merged with any Set-Cookie updates.
+// There is no server-side fallback/bootstrap for cookie state - the client
+// gets it exclusively from shib-auth-chrome-extension, which writes straight
+// into its localStorage. A request with no `x-zot-cookies` header is rejected
+// with 400 rather than falling back to anything read off disk here.
 
 const express = require("express");
 const cors = require("cors");
@@ -40,9 +40,7 @@ let config;
 try {
   config = require("./config.local.js");
 } catch (e) {
-  console.error(
-    "Missing config.local.js - copy config.example.js to config.local.js and fill in your cookies."
-  );
+  console.error("Missing config.local.js - create one with a `port` value.");
   process.exit(1);
 }
 
@@ -69,20 +67,24 @@ function encodeCookieState(state) {
   return Buffer.from(JSON.stringify(state)).toString("base64");
 }
 
-function bootstrapCookieState() {
-  return {
-    cf_clearance: config.cf_clearance,
-    shibsession_name: config.shibsession_name,
-    shibsession_value: config.shibsession_value,
-    AWSALB: config.AWSALB,
-    AWSALBCORS: config.AWSALBCORS,
-  };
+// Pulls the cookie state the client sent. No fallback - null means the
+// client hasn't authenticated via the extension yet.
+function resolveCookieState(req) {
+  return decodeCookieState(req.get(COOKIE_HEADER));
 }
 
-// Pulls the cookie state the client sent, or falls back to config.local.js's
-// bootstrap values if this is the client's first request.
-function resolveCookieState(req) {
-  return decodeCookieState(req.get(COOKIE_HEADER)) || bootstrapCookieState();
+// Resolves cookie state or responds 400 and returns null - callers should
+// bail out (`return`) when this returns null.
+function requireCookieState(req, res) {
+  const state = resolveCookieState(req);
+  if (!state) {
+    res.status(400).json({
+      error:
+        "No cookie state provided. Log into chat.zotgpt.uci.edu with shib-auth-chrome-extension installed first.",
+    });
+    return null;
+  }
+  return state;
 }
 
 // cf_clearance is Cloudflare's own bot-check pass, not app auth - it's only
@@ -180,7 +182,8 @@ app.use((req, res, next) => {
 
 // GET /api/quota - proxy quota check
 app.get("/api/quota", async (req, res) => {
-  const cookieState = resolveCookieState(req);
+  const cookieState = requireCookieState(req, res);
+  if (!cookieState) return;
   const { res: zotRes, cookieState: nextState } = await zotRequest({
     method: "GET",
     path: "/api/chat/quota",
@@ -218,7 +221,8 @@ app.get("/api/quota", async (req, res) => {
 // side (it shows up in the user's chat history) - it's not a free/no-op
 // lookup, so don't spam this endpoint.
 app.get("/api/new-chat", async (req, res) => {
-  const cookieState = resolveCookieState(req);
+  const cookieState = requireCookieState(req, res);
+  if (!cookieState) return;
   const { res: zotRes, cookieState: nextState } = await zotRequest({
     method: "POST",
     path: "/chat",
@@ -269,7 +273,8 @@ app.get("/api/new-chat", async (req, res) => {
 // as raw text (not re-encoded through express.json()) since we don't need to
 // touch it, just relay it upstream.
 app.post("/api/chat", express.text({ type: "*/*" }), async (req, res) => {
-  const cookieState = resolveCookieState(req);
+  const cookieState = requireCookieState(req, res);
+  if (!cookieState) return;
   const { res: zotRes, cookieState: nextState } = await zotRequest({
     method: "POST",
     path: "/api/chat",
