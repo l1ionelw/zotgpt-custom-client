@@ -1,0 +1,15 @@
+{
+  "name": "zotgpt-api-server",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Proxy/API server for the reverse-engineered chat.zotgpt.uci.edu API",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

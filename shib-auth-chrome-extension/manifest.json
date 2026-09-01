@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "UCI ZotGPT Authentication Helper",
+  "version": "1.0",
+  "permissions": ["cookies"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

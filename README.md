@@ -1,0 +1,300 @@
+# zotgpt-custom-client
+
+Reverse-engineering notes + a barebones debug client for the `chat.zotgpt.uci.edu`
+internal API (UCI's hosted ZotGPT chat, sitting in front of Bedrock/Claude models
+behind Shibboleth SSO + Cloudflare).
+
+This is for personal debugging of an endpoint you're already authenticated to
+via your own UCI login - it doesn't bypass auth, it just replays your existing
+browser session's cookies from a script instead of clicking around the UI.
+
+## Structure
+
+Two separate projects, run side by side:
+
+- **`server/`** - a small Express API server. This is the actual proxy (a proxy
+  is just a server whose job is forwarding requests to another server - there's
+  nothing more exotic going on than that). It holds the zotgpt cookies and makes
+  real server-to-server HTTP calls to `chat.zotgpt.uci.edu`, then exposes clean
+  endpoints (`/api/quota`, `/api/new-chat`, `/api/chat`) on `localhost:8787`.
+- **`web/`** - a separate Vite + React app (plain `.js`/`.jsx`, no TypeScript).
+  Uses `react-router-dom`'s `createBrowserRouter` with routes hardcoded into one
+  array (see `web/src/router.jsx`) - just a single flat debug page, no shared
+  nav/layout wrapping it. Talks only to the API server, via `API_URL` in
+  `web/src/config.js`. Runs on `localhost:5173`.
+
+## Why the API server exists at all
+
+You can't just point a `fetch()` straight at `chat.zotgpt.uci.edu` from the
+React app running on `localhost:5173`:
+
+- **`Cookie` is a forbidden header name.** Browser JS cannot set it via `fetch`/XHR,
+  period - not even same-origin, not even with `credentials: 'include'`. Cookies only
+  ride along automatically, and only for the domain that set them.
+- **CORS.** zotgpt almost certainly doesn't send `Access-Control-Allow-Origin` for
+  `http://localhost:xxxx`, so even a same-cookie-jar browser request would get
+  blocked reading the response.
+
+Neither restriction applies to a plain server-to-server HTTP call (whether made
+with Node's `https` module or `fetch` - same thing, only requests made *from a
+page in a browser* are restricted this way). So `server/server.js` holds the
+cookies and makes the real call itself, then hands the React app a normal
+CORS-enabled JSON/SSE API to talk to instead.
+
+## Setup
+
+```
+cd server
+copy config.example.js config.local.js   # (or `cp` on non-Windows)
+```
+
+Edit `server/config.local.js` and fill in your real cookie values (see below for
+how to find them). `config.local.js` is gitignored - **never commit real cookie
+values**, they're a live UCI SSO session.
+
+In one terminal:
+
+```
+cd server
+npm install
+npm run dev
+```
+
+In another:
+
+```
+cd web
+npm install
+npm run dev
+```
+
+`npm run dev` in `server/` runs `node --watch server.js`, restarting on save;
+`npm start` runs it without the watcher. `npm run dev` in `web/` starts the Vite
+dev server. Then open `http://localhost:5173`.
+
+## API notes (reverse-engineered 2026-08-31)
+
+### Auth
+
+Auth is Shibboleth SSO layered under Cloudflare's bot check. Of everything sent
+in a browser request, only these cookies actually matter:
+
+| cookie | what it is |
+|---|---|
+| `cf_clearance` | **Optional, not app auth.** Cloudflare's own bot-check pass - proof to the *edge* that this client already passed a challenge (JS challenge / managed challenge / etc), unrelated to your login. Only exists when Cloudflare currently thinks a challenge is warranted, which is conditional and lapses on its own - it's normal for it to be entirely absent from your browser's cookies. The server treats it as optional and omits it from the outgoing `Cookie` header when empty (see `config.example.js`). |
+| `_shibsession_<hex>` | **This is the actual auth cookie** - your UCI SSO session, issued by Shibboleth. The cookie name itself is just an encoding of the service-provider entity id, not a secret in itself; the value is. |
+| `AWSALB` / `AWSALBCORS` | AWS ALB stickiness cookies. The ALB reissues a brand new value via `Set-Cookie` on *every single response* - this is cosmetic session-affinity rotation, not a single-use nonce. Confirmed by experiment: reusing an old, already-superseded `AWSALB` value on a later request still worked fine. So tracking these is harmless but not actually load-bearing - any value the ALB has ever issued for your session seems to keep working. |
+| `msal.cache.encryption` | Seen in captured headers, doesn't appear to be required. Not sent by the proxy. |
+| `_opensaml_req_corr:<id>` | A short-lived SAML request-correlation cookie tied to one specific login handshake instance. Not part of the ongoing session - don't capture/store this one, it's not needed and won't stay valid anyway. |
+
+**Gotcha that looks like a cookie problem but isn't:** if every request 403s with a bare
+`<html><head><title>403 Forbidden</title></head>...` body and the response `server` header
+reads `awselb/2.0` (not `nginx`), that's the load balancer's WAF rejecting the request
+*before* it ever reaches the app or checks any cookie - almost always AWS's managed
+`NoUserAgent_HEADER` rule, because Node's `https.request` sends no `User-Agent` by
+default. `server.js` now always sends a browser-like `User-Agent`. If you ever see
+this again, check the `server` response header first to tell "WAF rejected me" apart
+from "the app rejected my cookies" (which comes back from `nginx` instead).
+
+**On every response**, zotgpt sends back updated `Set-Cookie` headers for
+`AWSALB`, `AWSALBCORS`, and sometimes `_shibsession_*`.
+
+### Where the cookie state actually lives
+
+`server.js` holds **no session state between requests** - it's stateless. The
+cookie values live in the browser's `localStorage` (see `web/src/cookies.js`),
+and get shuttled to/from the server on every call as a base64-JSON
+`x-zot-cookies` header (`web/src/api.js`'s `zotFetch` wrapper attaches it on
+the way out, and persists whatever the server sends back on the way in). This
+is the same shape as a bearer token, not an actual cookie.
+
+This isn't a real browser cookie for `chat.zotgpt.uci.edu`, and it can't be -
+a page served from `localhost:5173` can never write a cookie scoped to a
+different domain (see "Why the API server exists at all" above: `Document.cookie`
+is locked to the page's own origin, same reasoning as the forbidden-header
+rule for `fetch`). What travels through `localStorage` and the `x-zot-cookies`
+header is just the cookie *value* as ordinary JSON data - `server.js` is still
+the only thing that ever turns it into a real `Cookie:` HTTP header, and it
+only does that on its own outbound server-to-server call to zotgpt.
+
+`server/config.local.js` is only the **bootstrap seed**: `server.js` falls back
+to it when a request arrives with no `x-zot-cookies` header at all (empty
+`localStorage` - first run, or after clearing browser storage). Every request
+after that carries forward whatever the browser already has.
+
+To get fresh bootstrap values: log into `https://chat.zotgpt.uci.edu` in a real
+browser, open devtools → Network, click any request to `chat.zotgpt.uci.edu`,
+and copy the cookie values out of the request headers into `config.local.js`.
+(If the browser's `localStorage` already has newer values than that file, it'll
+keep using those instead - clear site data for `localhost:5173` to force it
+back to the bootstrap seed.)
+
+### Request shape
+
+All requests spoof:
+- `origin: https://chat.zotgpt.uci.edu`
+- `referer: https://chat.zotgpt.uci.edu/chat` (the full path with the chat id also
+  works, but the bare `/chat` referer is enough - simpler to hardcode)
+- `:authority` / Host is naturally `chat.zotgpt.uci.edu` since the proxy dials it directly.
+
+### `GET /api/chat/quota`
+
+Returns current usage against the account's quota.
+
+```json
+{
+  "costUsd": 0.16447,
+  "limitUsd": 15,
+  "percentUsed": 1,
+  "resetAt": "2026-09-01T21:09:56.168Z"
+}
+```
+
+### Chat IDs
+
+Every chat lives at `https://chat.zotgpt.uci.edu/chat/<id>`, and `<id>` is also
+the `id` field in the `/api/chat` POST body. IDs appear to be server-generated,
+not client-chosen - the client doesn't get to just make one up (or at least,
+we don't want to guess and risk breaking their system).
+
+**Resolved.** Original theory (`GET /chat` returns an HTTP redirect to a fresh
+id) was wrong - it just renders the SPA shell with a plain `200`. The real
+mechanism, found from a browser capture of clicking "New Chat" in the actual UI:
+it's a **Next.js Server Action**, not a REST endpoint.
+
+`POST https://chat.zotgpt.uci.edu/chat` with:
+- `next-action: 7cb16cfc17414dc6ccc4c6795f5c5c749cea4ad310` - a hash identifying
+  which server action to run. This is tied to the deployed build; if zotgpt
+  redeploys, this hash rotates and needs to be re-captured from a fresh browser
+  request (devtools → Network → click "New Chat" → check the request headers).
+- body: literal string `"[]"`, `content-type: text/plain;charset=UTF-8` - this
+  is Next's wire encoding for "call this server action with zero arguments."
+
+The response isn't JSON - it's a **React Flight/RSC stream** (`content-type:
+text/x-component`), formatted as newline-separated `N:<value>` chunks where
+values can reference each other and use non-standard syntax (e.g. `$D<iso
+date>` for Date objects). Chunk `0` is a pointer (`"a":"$@1"` = "look at chunk
+1"); chunk `1` is the actual created chat-thread object:
+
+```
+0:{"a":"$@1","f":"","q":"","i":false,"b":"L6yOSGYhqOHpWEd7YbOrX"}
+1:{"id":"1gKaDqHpqRUq9NCHL3zFvRHXYYGR9fy4LFX1","userId":"...","advancedSettings":{...},"chatModelDeploymentName":"us.anthropic.claude-sonnet-4-6","chatType":"simple",...,"name":"new chat","type":"CHAT_THREAD",...}
+```
+
+The proxy doesn't attempt a full Flight parse (its value syntax isn't standard
+JSON) - it just regexes `^1:\{"id":"([A-Za-z0-9_-]+)"` out of chunk 1 to grab
+the id, which is reliable since `id` is always the first key of that object.
+
+**This has a real side effect:** every successful call creates an actual
+persistent `CHAT_THREAD` document server-side (named "new chat", shows up in
+the account's chat history) - it's not an idempotent lookup. Don't spam
+`GET /api/new-chat` / the "get new chat id" button.
+
+`GET /api/new-chat` on the proxy wraps all of this and returns
+`{ "id": "...", "location": "/chat/<id>" }`, or a `502` with the upstream
+status/body attached if the server action call itself fails (e.g. a stale
+`next-action` hash after a redeploy).
+
+### `POST /api/chat`
+
+Sends a message and streams the reply back as an SSE (`text/event-stream`)
+response - **not** a single JSON blob.
+
+Example request body:
+
+```json
+{
+  "id": "t5d4QIVIsNGdEYIw48HCuc4f5yZATb8ocCxT",
+  "chatType": "simple",
+  "conversationStyle": "balanced",
+  "chatSearch": "none",
+  "chatAttachments": [],
+  "chatModelDeploymentName": "us.anthropic.claude-sonnet-5",
+  "documentType": "analysis_and_ocr",
+  "advancedSettings": {
+    "enableLatex": true,
+    "systemPrompt": "- You are UCI ZotGPT Chat who is a helpful AI Assistant.\n- You will provide clear and concise queries, and you will respond with polite and professional answers.\n- You will answer questions truthfully and accurately.",
+    "reasoningEnabled": true,
+    "reasoningTokens": 1024,
+    "reasoningEffort": "medium",
+    "enableWebSearch": false
+  },
+  "streamingPreferred": true,
+  "messages": [
+    {
+      "role": "user",
+      "parts": [{ "type": "text", "text": "hi" }],
+      "metadata": { "createdAt": 1788225354247 },
+      "id": "GSZ5AFPsJgGKghkK"
+    }
+  ],
+  "trigger": "submit-message"
+}
+```
+
+`id` in the top-level body must match the chat id from the URL. Each message
+also gets its own client-generated `id` (any short random string seems fine -
+it's just a message identifier, unlike the chat id).
+
+Example streamed response:
+
+```
+data: {"type":"start","messageMetadata":{"createdAt":1788225354815},"messageId":"jrBVxEMiYDNhHeVS"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"0"}
+
+data: {"type":"text-delta","id":"0","delta":"Hi there! How"}
+
+data: {"type":"text-delta","id":"0","delta":" can I help you today?"}
+
+data: {"type":"text-end","id":"0"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","messageMetadata":{"finishReason":"stop"}}
+
+data: [DONE]
+```
+
+Frames are separated by a blank line, each starts with `data: `, and the
+content to display is the concatenation of every `text-delta`'s `delta` field
+in order. `[DONE]` ends the stream.
+
+## Files
+
+- `server/server.js` - Express API server / proxy. Stateless - reads/writes
+  cookie state via the `x-zot-cookies` header on each request, forwards to
+  zotgpt, streams SSE straight through.
+- `server/config.example.js` / `server/config.local.js` - bootstrap cookie
+  seed, used only when a request has no `x-zot-cookies` header yet. Only
+  `.local.js` is read; `.example.js` is just the template, safe to commit.
+- `server/actions.json` - captured Next.js Server Action ids, keyed by name
+  (e.g. `ACTION_REQUEST_NEW_CHAT`). These are build-tied hashes - re-capture
+  from devtools if zotgpt redeploys and a call starts failing.
+- `server/package.json` - `npm run dev` (watch mode) / `npm start`. Deps:
+  `express`, `cors`.
+- `web/src/cookies.js` - `localStorage`-backed cookie state + base64
+  encode/decode helpers, mirroring the server's state shape.
+- `web/src/api.js` - `zotFetch()`, a `fetch` wrapper that attaches the stored
+  cookie state on the way out and persists the server's updated state on the
+  way back. Everything in `DebugPage.jsx` calls this instead of raw `fetch`.
+- `web/src/router.jsx` - the hardcoded route table (`createBrowserRouter`).
+- `web/src/pages/DebugPage.jsx` - the whole debug UI: quota check, new-chat-id
+  button, chat form with SSE streaming.
+- `web/src/config.js` - `API_URL`, pointing at the server above.
+- `web/package.json` - Vite + React + `react-router-dom`.
+
+## Known gaps / TODO
+
+- No automatic cookie *capture* from a real browser session yet - you still copy
+  `cf_clearance` / `_shibsession_*` in by hand into `config.local.js` when they
+  expire. Could later be automated with something like a browser extension or
+  Playwright login flow, but out of scope for this debug client.
+- No chat history loading (`GET` for an existing conversation's prior messages)
+  reverse-engineered yet - only sending new messages into a fresh chat id.
+- No handling of `chatAttachments` / file upload flow.
+- No retry/backoff if `cf_clearance` goes stale mid-session (you'll just start
+  getting HTML/Cloudflare-challenge responses instead of JSON - check the proxy's
+  console output).

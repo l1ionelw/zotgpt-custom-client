@@ -1,0 +1,5 @@
+{
+  "_comment": "Next.js Server Action ids captured from chat.zotgpt.uci.edu. These are hashes tied to the deployed build - if zotgpt redeploys, a given action's hash rotates and needs to be re-captured (devtools -> Network -> trigger the action in the real UI -> check the `next-action` request header).",
+
+  "ACTION_REQUEST_NEW_CHAT": "7cb16cfc17414dc6ccc4c6795f5c5c749cea4ad310"
+}
