@@ -34,11 +34,15 @@ export default function DebugPage() {
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
   const [editingChatId, setEditingChatId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const textareaRef = useRef(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: "end" });
+    // scroll only the messages list itself - scrollIntoView({block: "end"})
+    // can also drag ancestor/page scroll along with it, which was making the
+    // whole layout (textarea included) jump on mount and on every chat switch
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   function autoResizeTextarea() {
@@ -418,7 +422,7 @@ export default function DebugPage() {
             </select>
           </div>
 
-          <div className="flex-1 min-h-0 mb-2 space-y-2 overflow-y-auto">
+          <div ref={messagesContainerRef} className="flex-1 min-h-0 mb-2 space-y-2 overflow-y-auto">
             {messages.map((m) => (
               <div
                 key={m.id}
@@ -439,7 +443,6 @@ export default function DebugPage() {
                 )}
               </div>
             ))}
-            <div ref={messagesEndRef} />
           </div>
           <form onSubmit={sendMessage} className="flex items-end gap-2">
             <textarea

@@ -6,11 +6,16 @@ const POLL_MS = 30000;
 function formatResetIn(resetAt) {
   if (!resetAt) return null;
   const diffMs = new Date(resetAt).getTime() - Date.now();
+  // `resetAt` comes back as a UTC ISO string (e.g. "...T21:09:56.168Z");
+  // toLocaleString with no `timeZone` option already renders it in the
+  // viewer's own system time zone, not the server's - timeZoneName makes
+  // that explicit instead of leaving it ambiguous.
   const exact = new Date(resetAt).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
   });
   if (diffMs <= 0) return `resets soon (${exact})`;
   const diffHours = Math.floor(diffMs / 3_600_000);
@@ -32,10 +37,16 @@ export default function QuotaWidget() {
     try {
       const res = await zotFetch("/api/quota");
       const data = await res.json();
+      if (!res.ok) {
+        setQuota(null);
+        setError("error");
+        return;
+      }
       setQuota(data);
       setError(null);
     } catch {
-      setError("quota check failed");
+      setQuota(null);
+      setError("error");
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,19 @@
 
-const FRONTEND_URL = "http://localhost:5173";
+// Frontend URL to redirect back to once cookies are captured. Set via the
+// extension popup (popup.js), stored in chrome.storage.local so it persists
+// across service worker restarts - falls back to the debug default if never
+// set. Kept in sync locally by the storage.onChanged listener below so the
+// redirect handler doesn't need to do an async storage read inline.
+const STORAGE_KEY = "frontendUrl";
+let FRONTEND_URL = "http://localhost:5173";
+chrome.storage.local.get(STORAGE_KEY, (result) => {
+    if (result[STORAGE_KEY]) FRONTEND_URL = result[STORAGE_KEY];
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[STORAGE_KEY]) {
+        FRONTEND_URL = changes[STORAGE_KEY].newValue;
+    }
+});
 
 // Cookies needed; CF_CLEARANCE is optional
 const CF_CLEARANCE = { name: "cf_clearance", value: "" };

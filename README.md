@@ -60,6 +60,8 @@ module.exports = { port: 8787 };
 It's gitignored (nothing sensitive lives in it anymore, but keep it out of
 git regardless in case that changes).
 
+### Dev mode (two processes, hot reload)
+
 In one terminal:
 
 ```
@@ -79,6 +81,31 @@ npm run dev
 `npm run dev` in `server/` runs `node --watch server.js`, restarting on save;
 `npm start` runs it without the watcher. `npm run dev` in `web/` starts the Vite
 dev server. Then open `http://localhost:5173`.
+
+### Bundled mode (one process)
+
+`server.js` will also serve `web`'s build output directly if `server/static`
+exists, so you can run just the server and skip the separate Vite dev server.
+`web/vite.config.js` builds straight into `server/static` (not the default
+`web/dist`) so there's no copy step - `server/` is self-contained after a
+build:
+
+```
+cd web
+npm install
+npm run build   # `vite build` runs in mode "production" by default, which
+                # loads web/.env.production (VITE_PRODUCTION=1) - that's what
+                # makes API_URL resolve to relative /api paths instead of
+                # localhost:8787. `npm run dev` runs in mode "development"
+                # and never sets it, so debug is unaffected.
+cd ../server
+npm install
+npm start
+```
+
+Then open `http://localhost:8787` - same origin serves both the SPA and the
+API. Rebuild `web` any time frontend code changes - it's a static build
+artifact, not live-reloaded like Vite dev mode.
 
 ## API notes (reverse-engineered 2026-08-31)
 

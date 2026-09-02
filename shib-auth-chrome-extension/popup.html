@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font: 13px system-ui, sans-serif;
+        width: 260px;
+        padding: 10px;
+      }
+      label {
+        display: block;
+        margin-bottom: 4px;
+        color: #333;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 4px 6px;
+        margin-bottom: 8px;
+      }
+      button {
+        width: 100%;
+        padding: 6px;
+      }
+      #status {
+        margin-top: 6px;
+        color: #2a7a2a;
+        min-height: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <label for="frontend-url">Frontend URL (where the extension redirects back to once login is captured)</label>
+    <input id="frontend-url" type="text" placeholder="http://localhost:5173" />
+    <button id="save">Save</button>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

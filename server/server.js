@@ -34,6 +34,8 @@
 const express = require("express");
 const cors = require("cors");
 const https = require("https");
+const path = require("path");
+const fs = require("fs");
 const { ACTION_REQUEST_NEW_CHAT } = require("./actions.json");
 
 let config;
@@ -294,6 +296,23 @@ app.post("/api/chat", express.text({ type: "*/*" }), async (req, res) => {
   zotRes.on("end", () => res.end());
   zotRes.on("error", () => res.end());
 });
+
+// Serves the built web client if present, so `npm start` here alone is
+// enough - no separate Vite dev server needed. `web`'s Vite config builds
+// straight into this directory (`../web/vite.config.js`'s `build.outDir`
+// points at `../server/static`), so there's no copy step - just `npm run
+// build` in web/ then `npm start` here. The catch-all beneath it hands any
+// non-/api GET back to index.html so react-router's client-side routing
+// still works on a hard refresh of e.g. /chat/<id>. If `static/` hasn't been
+// built, both are skipped and unmatched requests just fall through to the
+// 404 handler below, same as before.
+const webStatic = path.join(__dirname, "static");
+if (fs.existsSync(webStatic)) {
+  app.use(express.static(webStatic));
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(webStatic, "index.html"));
+  });
+}
 
 app.use((req, res) => {
   res.status(404).json({ error: "not found" });
