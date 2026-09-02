@@ -266,6 +266,14 @@ Frames are separated by a blank line, each starts with `data: `, and the
 content to display is the concatenation of every `text-delta`'s `delta` field
 in order. `[DONE]` ends the stream.
 
+`finish.messageMetadata.finishReason` reports why the model stopped. Observed
+values: `"stop"` (normal completion) and `"content-filter"` (the response was
+cut short/blocked by a content filter - whatever text-delta chunks arrived
+before this is all you get, and the client should surface that instead of
+treating the reply as complete). Treat any value other than `"stop"` as
+worth flagging to the user; more reasons (e.g. a length/token cap) may exist
+upstream but haven't been observed yet.
+
 ## Files
 
 - `server/server.js` - Express API server / proxy. Stateless - reads/writes

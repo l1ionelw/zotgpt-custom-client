@@ -10,9 +10,11 @@ import {
   renameChat,
 } from "../storage.js";
 import QuotaWidget from "../components/QuotaWidget.jsx";
+import MarkdownMessage from "../components/MarkdownMessage.jsx";
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "../models.js";
 
 const MAX_TEXTAREA_HEIGHT = 200; // px
+const STREAM_IDLE_TIMEOUT_MS = 30000; // abort if no new chunk arrives for this long
 
 function randId() {
   return Math.random().toString(36).slice(2, 10);
@@ -151,7 +153,7 @@ export default function DebugPage() {
     setMessages((prev) => [
       ...prev,
       { id: randId(), role: "user", text },
-      { id: assistantMsgId, role: "assistant", text: "..." },
+      { id: assistantMsgId, role: "assistant", text: "...", reasoning: "" },
     ]);
 
     const existingThread = await getChatThread(id);
@@ -214,37 +216,81 @@ export default function DebugPage() {
     const decoder = new TextDecoder();
     let buffer = "";
     let assistantText = "";
+    let reasoningText = "";
+    let timedOut = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+    // watchdog: cancel the stream if no chunk arrives for STREAM_IDLE_TIMEOUT_MS
+    let idleTimer;
+    const armIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = true;
+        reader.cancel();
+      }, STREAM_IDLE_TIMEOUT_MS);
+    };
+    armIdleTimer();
 
-      // SSE frames are separated by blank lines
-      const frames = buffer.split("\n\n");
-      buffer = frames.pop(); // keep the last (possibly incomplete) frame
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        armIdleTimer();
+        buffer += decoder.decode(value, { stream: true });
 
-      for (const frame of frames) {
-        const line = frame.trim();
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") continue;
+        // SSE frames are separated by blank lines
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop(); // keep the last (possibly incomplete) frame
 
-        let event;
-        try {
-          event = JSON.parse(payload);
-        } catch {
-          continue;
-        }
+        for (const frame of frames) {
+          const line = frame.trim();
+          if (!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") continue;
 
-        if (event.type === "text-delta") {
-          assistantText += event.delta;
-          const snapshot = assistantText;
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMsgId ? { ...m, text: snapshot } : m))
-          );
+          let event;
+          try {
+            event = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+
+          if (event.type === "text-delta") {
+            assistantText += event.delta;
+            const snapshot = assistantText;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsgId ? { ...m, text: snapshot } : m))
+            );
+          } else if (event.type === "reasoning-delta") {
+            reasoningText += event.delta;
+            const snapshot = reasoningText;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsgId ? { ...m, reasoning: snapshot } : m))
+            );
+          } else if (event.type === "finish") {
+            const finishReason = event.messageMetadata?.finishReason;
+            if (finishReason && finishReason !== "stop") {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantMsgId ? { ...m, finishReason } : m))
+              );
+            }
+          }
         }
       }
+    } catch {
+      // reader.cancel() from the idle timeout rejects the pending read - ignore it,
+      // `timedOut` already records why we stopped
+    } finally {
+      clearTimeout(idleTimer);
+    }
+
+    if (timedOut) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId
+            ? { ...m, text: (m.text === "..." ? "" : m.text) + "\n\n_(stream timed out - no response for 30s)_" }
+            : m
+        )
+      );
     }
 
     if (assistantText) {
@@ -376,11 +422,21 @@ export default function DebugPage() {
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={
-                  "whitespace-pre-wrap " + (m.role === "user" ? "text-blue-300" : "text-neutral-300")
-                }
+                className={m.role === "user" ? "text-blue-300 whitespace-pre-wrap" : "text-neutral-300"}
               >
-                {m.role}: {m.text}
+                <span className="font-bold">{m.role}: </span>
+                {m.role === "assistant" && m.reasoning && (
+                  <details className="mb-1 text-xs text-neutral-500 border border-neutral-800 rounded px-2 py-1">
+                    <summary className="cursor-pointer select-none text-neutral-400">reasoning</summary>
+                    <div className="mt-1 whitespace-pre-wrap">{m.reasoning}</div>
+                  </details>
+                )}
+                {m.role === "assistant" ? <MarkdownMessage text={m.text} /> : m.text}
+                {m.role === "assistant" && m.finishReason && (
+                  <div className="mt-1 text-xs text-yellow-500">
+                    ⚠ response ended early: {m.finishReason}
+                  </div>
+                )}
               </div>
             ))}
             <div ref={messagesEndRef} />
