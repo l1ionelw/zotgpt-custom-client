@@ -15,8 +15,26 @@ concurrent writes arent handled by js or chromium storage api by default. must l
 */
 
 export async function getChatList() {
-    return JSON.parse(localStorage.getItem("zot-gpt-chats"));
+    const raw = localStorage.getItem("zot-gpt-chats");
+    return raw ? JSON.parse(raw) : [];
 }
+
+// upserts a chat's entry in the zot-gpt-chats list, bumping lastMessage
+async function updateChatMetadata(chatId, patch = {}) {
+    await navigator.locks.request("chat-list-lock", async () => {
+        const raw = localStorage.getItem("zot-gpt-chats");
+        const list = raw ? JSON.parse(raw) : [];
+        const idx = list.findIndex((c) => c.chatId === chatId); // chat id already exists? if so find it
+        const now = Date.now();
+        if (idx === -1) { // doesnt exist, create new. fallback to unnamed chat if no name 
+            list.push({ chatId, title: "unnamed chat", createdAt: now, lastMessage: now, ...patch });
+        } else { // exists? just apply patch
+            list[idx] = { ...list[idx], ...patch, lastMessage: now };
+        }
+        localStorage.setItem("zot-gpt-chats", JSON.stringify(list));
+    });
+}
+
 
 // role is user or assistant
 export async function storeNewChatMessage(chatId, role, message) {
@@ -27,15 +45,44 @@ export async function storeNewChatMessage(chatId, role, message) {
         chatHistory.push({ role, message });
         localStorage.setItem(chatId, JSON.stringify(chatHistory));
     });
+    await updateChatMetadata(chatId);
 }
 
-// only call when the user has actually typed a new message in a new obtained chat id 
+// only call when the user has actually typed a new message in a new obtained chat id
 export async function createNewChat(chatId, role, message) {
     localStorage.setItem(chatId, JSON.stringify([{ role, message }]));
+    await updateChatMetadata(chatId, { title: message.slice(0, 40) });
 }
 
 export async function getChatThread(chatId) {
-    JSON.parse(localStorage.getItem(chatId));
+    const raw = localStorage.getItem(chatId);
+    return raw ? JSON.parse(raw) : [];
+}
+
+// renames a chat's entry in the zot-gpt-chats list without touching lastMessage
+// (so renaming doesn't reshuffle a list sorted by recency)
+export async function renameChat(chatId, title) {
+    await navigator.locks.request("chat-list-lock", async () => {
+        const raw = localStorage.getItem("zot-gpt-chats");
+        const list = raw ? JSON.parse(raw) : [];
+        const idx = list.findIndex((c) => c.chatId === chatId);
+        if (idx === -1) return;
+        list[idx] = { ...list[idx], title };
+        localStorage.setItem("zot-gpt-chats", JSON.stringify(list));
+    });
+}
+
+// deletes a chat's message history and removes it from the zot-gpt-chats list
+export async function deleteChat(chatId) {
+    await navigator.locks.request(`chat-lock-${chatId}`, async () => {
+        localStorage.removeItem(chatId);
+    });
+    await navigator.locks.request("chat-list-lock", async () => {
+        const raw = localStorage.getItem("zot-gpt-chats");
+        const list = raw ? JSON.parse(raw) : [];
+        localStorage.setItem("zot-gpt-chats", JSON.stringify(list.filter((c) => c.chatId !== chatId))
+        );
+    });
 }
 
 
