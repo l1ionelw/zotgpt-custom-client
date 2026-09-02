@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { zotFetch } from "../api.js";
 import { clearCookieState } from "../cookies.js";
 
@@ -11,6 +11,13 @@ export default function DebugPage() {
   const [chatId, setChatId] = useState("");
   const [messages, setMessages] = useState([]); // [{ id, role, text }]
   const [chatInput, setChatInput] = useState("");
+
+  useEffect(()=>{
+    const chatId = localStorage.getItem("zot-fresh-chatid");
+    if (chatId !== null && chatId !== undefined) {
+      setChatId(chatId);
+    }
+  }, [])
 
   function getLastCookieSyncTime() {
     const lastSync = Number(localStorage.getItem("zot-last-cookie-sync-time"));
@@ -37,13 +44,6 @@ export default function DebugPage() {
     const res = await zotFetch("/api/quota");
     const data = await res.json();
     setQuota(JSON.stringify(data, null, 2));
-  }
-
-  async function getNewChatId() {
-    setChatId("loading...");
-    const res = await zotFetch("/api/new-chat");
-    const data = await res.json();
-    setChatId(data.id || JSON.stringify(data));
   }
 
   function resetCookies() {
@@ -179,20 +179,11 @@ export default function DebugPage() {
       </section>
 
       <section className="mb-4 p-3 border border-neutral-700 rounded">
-        <h2 className="font-bold mb-2">chat id</h2>
-        <button onClick={getNewChatId} className="px-2 py-1 bg-neutral-800 rounded">
-          get new chat id
-        </button>
-        <input
-          value={chatId}
-          onChange={(e) => setChatId(e.target.value)}
-          className="mt-2 w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1"
-          placeholder="chat id (e.g. t5d4QIVIsNGdEYIw48HCuc4f5yZATb8ocCxT)"
-        />
-      </section>
-
-      <section className="mb-4 p-3 border border-neutral-700 rounded">
         <h2 className="font-bold mb-2">chat</h2>
+        <div className="text-xs text-gray-500 pb-2">
+          {chatId === "" ? "error: no chat id" : `chat id ${chatId}`}
+        </div>
+        
         <div className="mb-2 space-y-2 max-h-96 overflow-y-auto">
           {messages.map((m) => (
             <div

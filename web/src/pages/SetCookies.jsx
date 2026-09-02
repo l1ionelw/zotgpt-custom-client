@@ -4,6 +4,7 @@ export default function SetCookies() {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const cookies = searchParams.get("cookies");
+    const freshChatId = searchParams.get("freshChatId");
 
     console.log("setting cookies");
 
@@ -22,6 +23,7 @@ export default function SetCookies() {
     }
 
     localStorage.setItem("zot-cookie-state", JSON.stringify(cookieState));
+    localStorage.setItem("zot-fresh-chatid", freshChatId);
     localStorage.setItem("zot-last-cookie-sync-time", Date.now());
     console.log("updated zot-cookie-state:", cookieState);
 
