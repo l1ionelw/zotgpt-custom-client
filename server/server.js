@@ -38,13 +38,9 @@ const path = require("path");
 const fs = require("fs");
 const { ACTION_REQUEST_NEW_CHAT } = require("./actions.json");
 
-let config;
-try {
-  config = require("./config.local.js");
-} catch (e) {
-  console.error("Missing config.local.js - create one with a `port` value.");
-  process.exit(1);
-}
+// Render (and most hosts) inject PORT themselves - read it there and fall
+// back to 8787 for local dev, so nothing extra needs configuring either way.
+const PORT = process.env.PORT || 8787;
 
 const ZOTGPT_HOST = "chat.zotgpt.uci.edu";
 const COOKIE_HEADER = "x-zot-cookies";
@@ -323,6 +319,6 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: String(err) });
 });
 
-app.listen(config.port, () => {
-  console.log(`zotgpt API server running at http://localhost:${config.port}`);
+app.listen(PORT, () => {
+  console.log(`zotgpt API server running at http://localhost:${PORT}`);
 });

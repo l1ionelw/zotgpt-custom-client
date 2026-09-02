@@ -51,14 +51,9 @@ your browser first - the server has no way to get cookies on its own anymore,
 and every endpoint 400s until you've logged into zotgpt with it installed at
 least once.
 
-`server/config.local.js` only needs a `port` value now:
-
-```js
-module.exports = { port: 8787 };
-```
-
-It's gitignored (nothing sensitive lives in it anymore, but keep it out of
-git regardless in case that changes).
+The server reads its port from `process.env.PORT`, falling back to `8787` for
+local dev - nothing to configure unless you want a different local port
+(`PORT=1234 npm start`). Render (and most hosts) inject `PORT` themselves.
 
 ### Dev mode (two processes, hot reload)
 
@@ -306,7 +301,6 @@ upstream but haven't been observed yet.
 - `server/server.js` - Express API server / proxy. Stateless - reads/writes
   cookie state via the `x-zot-cookies` header on each request, forwards to
   zotgpt, streams SSE straight through.
-- `server/config.local.js` - just `{ port }` now. Gitignored.
 - `server/actions.json` - captured Next.js Server Action ids, keyed by name
   (e.g. `ACTION_REQUEST_NEW_CHAT`). These are build-tied hashes - re-capture
   from devtools if zotgpt redeploys and a call starts failing.
